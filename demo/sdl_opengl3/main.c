@@ -138,6 +138,12 @@ int main(void)
             nk_sdl_handle_event(&evt);
         } nk_input_end(ctx);
 
+        GLenum err;
+        while ((err = glGetError()) != GL_NO_ERROR)
+        {
+            fprintf(stderr, "glError 0x%04X\n", err);
+        }
+
         /* GUI */
         if (nk_begin(ctx, "Demo", nk_rect(50, 50, 230, 250),
             NK_WINDOW_BORDER|NK_WINDOW_MOVABLE|NK_WINDOW_SCALABLE|
