@@ -50,6 +50,24 @@ struct nk_sdl_device {
     GLint attrib_col;
     GLint uniform_tex;
     GLint uniform_proj;
+
+    GLint uniform_igmage_width;
+    GLint uniform_igmage_height;
+    GLint uniform_atlas_offset_x;
+    GLint uniform_atlas_offset_y;
+    GLint uniform_atlas_offset_z;
+    GLint uniform_atlas_width;
+    GLint uniform_atlas_height;
+
+    GLint image_width;
+    GLint image_height;
+    GLint atlas_offset_x;
+    GLint atlas_offset_y;
+    GLint atlas_offset_z;
+    GLint atlas_width;
+    GLint atlas_height;
+    GLint atlas_depth;
+
     GLuint font_tex;
 };
 
@@ -91,12 +109,22 @@ nk_sdl_device_create(void)
     static const GLchar *fragment_shader =
         NK_SHADER_VERSION
         "precision mediump float;\n"
-        "uniform sampler2D Texture;\n"
+        "uniform sampler2DArray Texture;\n"
+        "uniform float igmage_width;\n"
+        "uniform float igmage_height;\n"
+        "uniform float atlas_offset_x;\n"
+        "uniform float atlas_offset_y;\n"
+        "uniform float atlas_offset_z;\n"
+        "uniform float atlas_width;\n"
+        "uniform float atlas_height;\n"
         "in vec2 Frag_UV;\n"
         "in vec4 Frag_Color;\n"
         "out vec4 Out_Color;\n"
         "void main(){\n"
-        "   Out_Color = Frag_Color * texture(Texture, Frag_UV.st);\n"
+        "   Out_Color = Frag_Color * texture(Texture, vec3(\n"
+        "       (atlas_offset_x + Frag_UV.s * igmage_width) / atlas_width,\n"
+        "       (atlas_offset_y + Frag_UV.t * igmage_height) / atlas_height,\n"
+        "       atlas_offset_z));\n"
         "}\n";
 
     struct nk_sdl_device *dev = &sdl.ogl;
@@ -124,6 +152,14 @@ nk_sdl_device_create(void)
     dev->attrib_uv = glGetAttribLocation(dev->prog, "TexCoord");
     dev->attrib_col = glGetAttribLocation(dev->prog, "Color");
 
+    dev->uniform_igmage_width = glGetUniformLocation(dev->prog, "igmage_width");
+    dev->uniform_igmage_height = glGetUniformLocation(dev->prog, "igmage_height");
+    dev->uniform_atlas_offset_x = glGetUniformLocation(dev->prog, "atlas_offset_x");
+    dev->uniform_atlas_offset_y = glGetUniformLocation(dev->prog, "atlas_offset_y");
+    dev->uniform_atlas_offset_z = glGetUniformLocation(dev->prog, "atlas_offset_z");
+    dev->uniform_atlas_width = glGetUniformLocation(dev->prog, "atlas_width");
+    dev->uniform_atlas_height = glGetUniformLocation(dev->prog, "atlas_height");
+
     {
         /* buffer setup */
         GLsizei vs = sizeof(struct nk_sdl_vertex);
@@ -148,7 +184,7 @@ nk_sdl_device_create(void)
         glVertexAttribPointer((GLuint)dev->attrib_col, 4, GL_UNSIGNED_BYTE, GL_TRUE, vs, (void*)vc);
     }
 
-    glBindTexture(GL_TEXTURE_2D, 0);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
     glBindVertexArray(0);
@@ -158,12 +194,33 @@ NK_INTERN void
 nk_sdl_device_upload_atlas(const void *image, int width, int height)
 {
     struct nk_sdl_device *dev = &sdl.ogl;
+
+    GLint maxTextureSize, maxArrayTextureLayers;
+    glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxTextureSize);
+    glGetIntegerv(GL_MAX_ARRAY_TEXTURE_LAYERS, &maxArrayTextureLayers);
+    dev->image_width = width;
+    dev->image_height = height;
+    dev->atlas_offset_x = 100;
+    dev->atlas_offset_y = 100;
+    dev->atlas_offset_z = 0;
+    dev->atlas_height = maxTextureSize;
+    dev->atlas_width = maxTextureSize;
+    dev->atlas_height = maxTextureSize;
+    dev->atlas_depth = 2; // Works for [1, 3, 4, 5], but not 2?
+    printf("nk_sdl_device_upload_atlas: image size (%d,%d), atlas offset (%d,%d,%d), "
+           "atlas size (%d,%d,%d), max (%d,%d,%d)\n",
+           dev->image_width, dev->image_height, dev->atlas_offset_x, dev->atlas_offset_y,
+           dev->atlas_offset_z, dev->atlas_width, dev->atlas_height, dev->atlas_depth,
+           maxTextureSize, maxTextureSize, maxArrayTextureLayers);
+
     glGenTextures(1, &dev->font_tex);
-    glBindTexture(GL_TEXTURE_2D, dev->font_tex);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, (GLsizei)width, (GLsizei)height, 0,
-                GL_RGBA, GL_UNSIGNED_BYTE, image);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, dev->font_tex);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGBA, dev->atlas_width,
+                dev->atlas_height, dev->atlas_depth, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, dev->atlas_offset_x, dev->atlas_offset_y,
+                dev->atlas_offset_z, width, height, 1, GL_RGBA, GL_UNSIGNED_BYTE, image);
 }
 
 NK_API void
@@ -215,6 +272,15 @@ nk_sdl_render(enum nk_anti_aliasing AA, int max_vertex_buffer, int max_element_b
     /* setup program */
     glUseProgram(dev->prog);
     glUniform1i(dev->uniform_tex, 0);
+
+    glUniform1f(dev->uniform_igmage_width, dev->image_width);
+    glUniform1f(dev->uniform_igmage_height, dev->image_height);
+    glUniform1f(dev->uniform_atlas_offset_x, dev->atlas_offset_x);
+    glUniform1f(dev->uniform_atlas_offset_y, dev->atlas_offset_y);
+    glUniform1f(dev->uniform_atlas_offset_z, dev->atlas_offset_z);
+    glUniform1f(dev->uniform_atlas_width, dev->atlas_width);
+    glUniform1f(dev->uniform_atlas_height, dev->atlas_height);
+
     glUniformMatrix4fv(dev->uniform_proj, 1, GL_FALSE, &ortho[0][0]);
     {
         /* convert from command queue into draw list and draw to screen */
@@ -266,7 +332,7 @@ nk_sdl_render(enum nk_anti_aliasing AA, int max_vertex_buffer, int max_element_b
         /* iterate over and execute each draw command */
         nk_draw_foreach(cmd, &sdl.ctx, &dev->cmds) {
             if (!cmd->elem_count) continue;
-            glBindTexture(GL_TEXTURE_2D, (GLuint)cmd->texture.id);
+            glBindTexture(GL_TEXTURE_2D_ARRAY, (GLuint)cmd->texture.id);
             glScissor((GLint)(cmd->clip_rect.x * scale.x),
                 (GLint)((height - (GLint)(cmd->clip_rect.y + cmd->clip_rect.h)) * scale.y),
                 (GLint)(cmd->clip_rect.w * scale.x),
